@@ -14,7 +14,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Full 222 F&O Stock Symbol List from uploaded file
 FO_SYMBOLS = [
     '360ONE.NS', 'ABB.NS', 'ADANIENSOL.NS', 'ADANIENT.NS', 'ADANIGREEN.NS', 'ADANIPORTS.NS', 'ADANIPOWER.NS', 'ABCAPITAL.NS', 
     'ALKEM.NS', 'AMBER.NS', 'AMBUJACEM.NS', 'ANANDRATHI.NS', 'ANGELONE.NS', 'APLAPOLLO.NS', 'APOLLOHOSP.NS', 'ASHOKLEY.NS', 
@@ -44,39 +43,44 @@ FO_SYMBOLS = [
     'VMM.NS', 'IDEA.NS', 'VOLTAS.NS', 'WAAREEENER.NS', 'WIPRO.NS', 'YESBANK.NS', 'ZYDUSLIFE.NS'
 ]
 
-# Indicator Helper Functions
 def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    val = float(100 - (100 / (1 + rs)).iloc[-1])
-    return round(val, 2) if not np.isnan(val) else 0.0
+    try:
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        val = float(100 - (100 / (1 + rs)).iloc[-1])
+        return round(val, 2) if not np.isnan(val) else 50.0
+    except:
+        return 50.0
 
 def calculate_mfi(df, period=14):
-    tp = (df['High'] + df['Low'] + df['Close']) / 3
-    rmf = tp * df['Volume']
-    pmf = rmf.where(tp > tp.shift(1), 0).rolling(window=period).sum()
-    nmf = rmf.where(tp < tp.shift(1), 0).rolling(window=period).sum()
-    mfi = 100 - (100 / (1 + (pmf / nmf)))
-    val = float(mfi.iloc[-1])
-    return round(val, 2) if not np.isnan(val) else 0.0
+    try:
+        tp = (df['High'] + df['Low'] + df['Close']) / 3
+        rmf = tp * df['Volume']
+        pmf = rmf.where(tp > tp.shift(1), 0).rolling(window=period).sum()
+        nmf = rmf.where(tp < tp.shift(1), 0).rolling(window=period).sum()
+        mfi = 100 - (100 / (1 + (pmf / nmf)))
+        val = float(mfi.iloc[-1])
+        return round(val, 2) if not np.isnan(val) else 50.0
+    except:
+        return 50.0
 
 def calculate_williams_r(df, period=14):
-    hh = df['High'].rolling(window=period).max()
-    ll = df['Low'].rolling(window=period).min()
-    denom = hh.iloc[-1] - ll.iloc[-1]
-    wr = -100 * ((hh.iloc[-1] - df['Close'].iloc[-1]) / (denom if denom != 0 else 1))
-    val = float(wr)
-    return round(val, 2) if not np.isnan(val) else 0.0
+    try:
+        hh = df['High'].rolling(window=period).max()
+        ll = df['Low'].rolling(window=period).min()
+        denom = hh.iloc[-1] - ll.iloc[-1]
+        wr = -100 * ((hh.iloc[-1] - df['Close'].iloc[-1]) / (denom if denom != 0 else 1))
+        val = float(wr)
+        return round(val, 2) if not np.isnan(val) else -50.0
+    except:
+        return -50.0
 
 @app.get("/")
 def home():
-    return {"status": "RBS Screener Backend running with 222 F&O stocks"}
+    return {"status": "RBS Screener Backend Active"}
 
-# ------------------------------------------------------------------
-# DEDICATED ENDPOINT: ORIGINAL UNTOUCHED RBS SCREENER
-# ------------------------------------------------------------------
 @app.get("/api/screener")
 def get_rbs_screener():
     try:
@@ -97,7 +101,7 @@ def get_rbs_screener():
                 change_pct = round(((current_price - prev_close) / prev_close) * 100, 2)
                 volume = int(df['Volume'].iloc[-1])
 
-                # Core RBS Math (Unchanged)
+                # Original Unchanged RBS Formula
                 high = float(df['High'].iloc[-1])
                 low = float(df['Low'].iloc[-1])
                 buyer_strength = current_price - low
@@ -120,18 +124,14 @@ def get_rbs_screener():
                     "rbs_ratio": rbs_ratio,
                     "status": status
                 })
-            except Exception:
+            except:
                 continue
 
         results.sort(key=lambda x: x["rbs_ratio"], reverse=True)
         return {"symbols": results}
-
     except Exception as e:
         return {"error": str(e), "symbols": []}
 
-# ------------------------------------------------------------------
-# DEDICATED ENDPOINT: TECHNICAL MATRIX (RSI / MFI / Williams %R)
-# ------------------------------------------------------------------
 @app.get("/api/indicators")
 def get_indicators_screener():
     try:
@@ -144,7 +144,7 @@ def get_indicators_screener():
                 df = data[ticker] if len(FO_SYMBOLS) > 1 else data
                 df = df.dropna()
 
-                if len(df) < 20:
+                if len(df) < 15:
                     continue
 
                 current_price = float(df['Close'].iloc[-1])
@@ -170,11 +170,10 @@ def get_indicators_screener():
                     "williams_r": williams_r,
                     "signal": signal
                 })
-            except Exception:
+            except:
                 continue
 
         results.sort(key=lambda x: x["rsi"], reverse=True)
         return {"symbols": results}
-
     except Exception as e:
         return {"error": str(e), "symbols": []}
