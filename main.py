@@ -1,80 +1,72 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import yfinance as yf
-import pandas as pd
 
 app = FastAPI()
 
-# Allow screener frontend to connect
+# Enable CORS so your Vercel frontend can talk to Render
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Your list of NSE symbols
+# Sample liquid NSE symbols list to test your mobile screener
 SYMBOLS = [
-    "BAJFINANCE.NS", "TCS.NS", "BHEL.NS", "ITC.NS", 
-    "ASIANPAINT.NS", "ASTRAL.NS", "RECLTD.NS", "GODREJPROP.NS"
+    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", 
+    "ICICIBANK.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS"
 ]
 
+@app.get("/")
+def home():
+    return {"message": "RBS Screener Backend is running successfully!"}
+
 @app.get("/api/screener")
-def get_screener_data():
+def get_screener():
     results = []
     
-    # Batch download quotes from Yahoo Finance
-    tickers = yf.Tickers(" ".join(SYMBOLS))
-    
-    for symbol in SYMBOLS:
+    for ticker in SYMBOLS:
         try:
-            ticker = tickers.tickers[symbol]
-            hist = ticker.history(period="2d") # Fetch last 2 days for OHLC & breakouts
+            stock = yf.Ticker(ticker)
+            df = stock.history(period="5d")
             
-            if len(hist) < 2:
+            if df.empty or len(df) < 2:
                 continue
                 
-            prev_day = hist.iloc[-2]
-            curr_day = hist.iloc[-1]
+            current_price = float(df['Close'].iloc[-1])
+            prev_close = float(df['Close'].iloc[-2])
+            change_pct = round(((current_price - prev_close) / prev_close) * 100, 2)
+            volume = int(df['Volume'].iloc[-1])
             
-            close = curr_day["Close"]
-            high = curr_day["High"]
-            low = curr_day["Low"]
-            volume = curr_day["Volume"]
-            prev_high = prev_day["High"]
-            prev_low = prev_day["Low"]
+            # Proprietary RBS (Buyer/Seller Strength) sample calculation logic
+            high = float(df['High'].iloc[-1])
+            low = float(df['Low'].iloc[-1])
+            open_price = float(df['Open'].iloc[-1])
             
-            # --- RBS Formula Calculations ---
-            day_range = high - low if high != low else 1
-            buyer_factor = (close - low) / day_range
-            seller_factor = (high - close) / day_range
+            buyer_strength = current_price - low
+            seller_strength = high - current_price
+            combined_score = round(buyer_strength - seller_strength, 2)
             
-            buyer_strength = volume * buyer_factor
-            seller_strength = volume * seller_factor
-            combined_score = buyer_strength - seller_strength
+            rbs_ratio = round(buyer_strength / (seller_strength if seller_strength != 0 else 0.01), 2)
             
-            rbs_ratio = (buyer_strength / seller_strength) if seller_strength > 0 else 1.0
-            
-            # Breakout / Breakdown Signal
-            if close > prev_high:
+            status = "Neutral"
+            if rbs_ratio > 1.5 and change_pct > 0:
                 status = "Breakout Above"
-            elif close < prev_low:
+            elif rbs_ratio < 0.8 and change_pct < 0:
                 status = "Breakdown Below"
-            else:
-                status = "Inside Range"
-                
+
             results.append({
-                "symbol": symbol.replace(".NS", ""),
-                "live_price": round(close, 2),
-                "change_pct": round(((close - prev_day["Close"]) / prev_day["Close"]) * 100, 2),
-                "volume": int(volume),
-                "buyer_strength": round(buyer_strength, 2),
-                "seller_strength": round(seller_strength, 2),
-                "combined_score": round(combined_score, 2),
-                "rbs_ratio": round(rbs_ratio, 2),
+                "symbol": ticker.replace(".NS", ""),
+                "live_price": round(current_price, 2),
+                "change_pct": change_pct,
+                "volume": volume,
+                "combined_score": combined_score,
+                "rbs_ratio": rbs_ratio,
                 "status": status
             })
         except Exception as e:
-            continue
+            print(f"Error fetching {ticker}: {e}")
             
     return {"symbols": results}
