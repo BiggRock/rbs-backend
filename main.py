@@ -43,51 +43,17 @@ FO_SYMBOLS = [
     'VMM.NS', 'IDEA.NS', 'VOLTAS.NS', 'WAAREEENER.NS', 'WIPRO.NS', 'YESBANK.NS', 'ZYDUSLIFE.NS'
 ]
 
-def calculate_rsi(series, period=14):
-    try:
-        delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        val = float(100 - (100 / (1 + rs)).iloc[-1])
-        return round(val, 2) if not np.isnan(val) else 50.0
-    except:
-        return 50.0
-
-def calculate_mfi(df, period=14):
-    try:
-        tp = (df['High'] + df['Low'] + df['Close']) / 3
-        rmf = tp * df['Volume']
-        pmf = rmf.where(tp > tp.shift(1), 0).rolling(window=period).sum()
-        nmf = rmf.where(tp < tp.shift(1), 0).rolling(window=period).sum()
-        mfi = 100 - (100 / (1 + (pmf / nmf)))
-        val = float(mfi.iloc[-1])
-        return round(val, 2) if not np.isnan(val) else 50.0
-    except:
-        return 50.0
-
-def calculate_williams_r(df, period=14):
-    try:
-        hh = df['High'].rolling(window=period).max()
-        ll = df['Low'].rolling(window=period).min()
-        denom = hh.iloc[-1] - ll.iloc[-1]
-        wr = -100 * ((hh.iloc[-1] - df['Close'].iloc[-1]) / (denom if denom != 0 else 1))
-        val = float(wr)
-        return round(val, 2) if not np.isnan(val) else -50.0
-    except:
-        return -50.0
-
 @app.get("/")
 def home():
-    return {"status": "RBS Screener Backend Active"}
+    return {"status": "Detailed RBS Screener Backend Active"}
 
 @app.get("/api/screener")
-def get_rbs_screener():
+def get_deep_rbs_screener():
     try:
         tickers_str = " ".join(FO_SYMBOLS)
         data = yf.download(tickers_str, period="5d", interval="1d", group_by="ticker", threads=True, progress=False)
 
-        results = []
+        raw_list = []
         for ticker in FO_SYMBOLS:
             try:
                 df = data[ticker] if len(FO_SYMBOLS) > 1 else data
@@ -96,84 +62,97 @@ def get_rbs_screener():
                 if len(df) < 2:
                     continue
 
-                current_price = float(df['Close'].iloc[-1])
-                prev_close = float(df['Close'].iloc[-2])
-                change_pct = round(((current_price - prev_close) / prev_close) * 100, 2)
-                volume = int(df['Volume'].iloc[-1])
+                # Current Day OHLCV
+                c_open = float(df['Open'].iloc[-1])
+                c_high = float(df['High'].iloc[-1])
+                c_low = float(df['Low'].iloc[-1])
+                c_close = float(df['Close'].iloc[-1])
+                c_vol = float(df['Volume'].iloc[-1])
 
-                # Original Unchanged RBS Formula
-                high = float(df['High'].iloc[-1])
-                low = float(df['Low'].iloc[-1])
-                buyer_strength = current_price - low
-                seller_strength = high - current_price
-                combined_score = round(buyer_strength - seller_strength, 2)
-                rbs_ratio = round(buyer_strength / (seller_strength if seller_strength != 0 else 0.01), 2)
+                # Previous Day OHLCV
+                p_open = float(df['Open'].iloc[-2])
+                p_high = float(df['High'].iloc[-2])
+                p_low = float(df['Low'].iloc[-2])
+                p_close = float(df['Close'].iloc[-2])
 
-                status = "Neutral"
-                if rbs_ratio > 1.5 and change_pct > 0:
+                day_range = c_high - c_low
+                prev_day_range = p_high - p_low
+
+                # Buyer / Seller Ratios
+                if day_range > 0:
+                    bs = (c_close - c_low) / day_range
+                    ss = (c_high - c_close) / day_range
+                else:
+                    bs = 0.5
+                    ss = 0.5
+
+                if prev_day_range > 0:
+                    prev_bs = (p_close - p_low) / prev_day_range
+                    prev_ss = (p_high - p_close) / prev_day_range
+                    prev_r_factor = prev_bs - prev_ss
+                else:
+                    prev_r_factor = 0.0
+
+                buyer_strength = bs * c_vol
+                seller_strength = ss * c_vol
+                buyer_weighted = buyer_strength
+                seller_weighted = seller_strength
+                combined_score = buyer_weighted - seller_weighted
+
+                rbs_ratio = bs - ss
+                change_r_factor = rbs_ratio - prev_r_factor
+
+                buyer_seller_ratio = bs / ss if ss > 0 else (999.0 if bs > 0 else 1.0)
+
+                # Breakout / Breakdown condition matching your Google Sheet
+                if c_high > p_high:
                     status = "Breakout Above"
-                elif rbs_ratio < 0.8 and change_pct < 0:
+                elif c_low < p_low:
                     status = "Breakdown Below"
+                else:
+                    status = "Inside Range"
 
-                results.append({
+                raw_list.append({
                     "symbol": ticker.replace(".NS", ""),
-                    "live_price": round(current_price, 2),
-                    "change_pct": change_pct,
-                    "volume": volume,
-                    "combined_score": combined_score,
-                    "rbs_ratio": rbs_ratio,
-                    "status": status
+                    "live_price": round(c_close, 2),
+                    "p_open": round(p_open, 2),
+                    "p_high": round(p_high, 2),
+                    "p_low": round(p_low, 2),
+                    "p_close": round(p_close, 2),
+                    "c_open": round(c_open, 2),
+                    "c_high": round(c_high, 2),
+                    "c_low": round(c_low, 2),
+                    "c_close": round(c_close, 2),
+                    "c_vol": int(c_vol),
+                    "buyer_strength": round(buyer_strength, 2),
+                    "seller_strength": round(seller_strength, 2),
+                    "buyer_weighted": round(buyer_weighted, 2),
+                    "seller_weighted": round(seller_weighted, 2),
+                    "combined_score": round(combined_score, 2),
+                    "bs": round(bs, 4),
+                    "ss": round(ss, 4),
+                    "rbs_ratio": round(rbs_ratio, 4),
+                    "status": status,
+                    "buyer_seller_ratio": round(buyer_seller_ratio, 4),
+                    "prev_r_factor": round(prev_r_factor, 4),
+                    "change_r_factor": round(change_r_factor, 4)
                 })
-            except:
+            except Exception:
                 continue
 
-        results.sort(key=lambda x: x["rbs_ratio"], reverse=True)
-        return {"symbols": results}
-    except Exception as e:
-        return {"error": str(e), "symbols": []}
+        # Add Volume Rank & Combined Rank across all fetched symbols
+        raw_list.sort(key=lambda x: x["c_vol"], reverse=True)
+        for rank, item in enumerate(raw_list, 1):
+            item["vol_rank"] = rank
 
-@app.get("/api/indicators")
-def get_indicators_screener():
-    try:
-        tickers_str = " ".join(FO_SYMBOLS)
-        data = yf.download(tickers_str, period="1mo", interval="1d", group_by="ticker", threads=True, progress=False)
+        raw_list.sort(key=lambda x: x["combined_score"], reverse=True)
+        for rank, item in enumerate(raw_list, 1):
+            item["combined_rank"] = rank
 
-        results = []
-        for ticker in FO_SYMBOLS:
-            try:
-                df = data[ticker] if len(FO_SYMBOLS) > 1 else data
-                df = df.dropna()
+        # Default sort by RBS Ratio descending
+        raw_list.sort(key=lambda x: x["rbs_ratio"], reverse=True)
 
-                if len(df) < 15:
-                    continue
+        return {"symbols": raw_list}
 
-                current_price = float(df['Close'].iloc[-1])
-                prev_close = float(df['Close'].iloc[-2])
-                change_pct = round(((current_price - prev_close) / prev_close) * 100, 2)
-
-                rsi = calculate_rsi(df['Close'])
-                mfi = calculate_mfi(df)
-                williams_r = calculate_williams_r(df)
-
-                signal = "Neutral"
-                if rsi > 60 and mfi > 50 and williams_r > -20:
-                    signal = "Bullish Momentum"
-                elif rsi < 40 and mfi < 40 and williams_r < -80:
-                    signal = "Bearish Momentum"
-
-                results.append({
-                    "symbol": ticker.replace(".NS", ""),
-                    "live_price": round(current_price, 2),
-                    "change_pct": change_pct,
-                    "rsi": rsi,
-                    "mfi": mfi,
-                    "williams_r": williams_r,
-                    "signal": signal
-                })
-            except:
-                continue
-
-        results.sort(key=lambda x: x["rsi"], reverse=True)
-        return {"symbols": results}
     except Exception as e:
         return {"error": str(e), "symbols": []}
